@@ -123,6 +123,9 @@ jobs:
           cp openclaw.mjs    "${STAGE}/openclaw/"
           cp package.json    "${STAGE}/openclaw/"
           cp -r dist         "${STAGE}/openclaw/dist"
+          cp -r docs/reference/templates "${STAGE}/openclaw/docs/reference/templates"
+          # Extensions source (runtime loads .ts files directly); exclude node_modules and tests
+          rsync -a --exclude='node_modules' --exclude='*.test.ts' --exclude='*.test.js' extensions/ "${STAGE}/openclaw/extensions/"
           # Remove broken symlinks left by pnpm prune before copying
           find node_modules -type l ! -exec test -e {} \; -delete 2>/dev/null || true
           cp -r node_modules "${STAGE}/openclaw/node_modules"
@@ -186,6 +189,9 @@ jobs:
           Copy-Item openclaw.mjs "$STAGE\openclaw\"
           Copy-Item package.json "$STAGE\openclaw\"
           Copy-Item -Recurse dist         "$STAGE\openclaw\dist"
+          Copy-Item -Recurse docs\reference\templates "$STAGE\openclaw\docs\reference\templates"
+          # Extensions source (runtime loads .ts files directly); exclude node_modules
+          robocopy extensions "$STAGE\openclaw\extensions" /E /XD node_modules /XF *.test.ts *.test.js /NFL /NDL /NJH /NJS; if ($LASTEXITCODE -le 7) { $LASTEXITCODE = 0 }
           Copy-Item -Recurse node_modules "$STAGE\openclaw\node_modules"
 
           # Full Node.js distribution for Windows
