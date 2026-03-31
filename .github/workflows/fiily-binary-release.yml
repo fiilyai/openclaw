@@ -41,7 +41,7 @@ concurrency:
 
 env:
   NODE_BUILD_VERSION: "24.x"
-  PNPM_VERSION: "10.23.0"
+  PNPM_VERSION: "10.32.1"
   NODE_BUNDLE_VERSION: ${{ inputs.node_bundle_version || '24.0.2' }}
 
 jobs:
@@ -55,7 +55,7 @@ jobs:
             os: darwin
             arch: arm64
             node_platform: darwin-arm64
-          - runner: macos-13
+          - runner: macos-14
             os: darwin
             arch: x64
             node_platform: darwin-x64
