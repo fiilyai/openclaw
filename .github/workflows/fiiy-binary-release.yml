@@ -136,20 +136,20 @@ jobs:
           echo "${NODE_VER}" > "${STAGE}/bin/.node-version"
 
           # ── openclaw wrapper (falls back to system node if bundled deleted) ──
-          cat > "${STAGE}/bin/openclaw" << 'WRAPPER'
-#!/bin/sh
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -x "${SCRIPT_DIR}/node" ]; then
-  NODE="${SCRIPT_DIR}/node"
-else
-  NODE="$(command -v node 2>/dev/null || true)"
-  if [ -z "${NODE}" ]; then
-    echo "openclaw: node not found. Re-run 'fiiy install' or install Node.js >= 24." >&2
-    exit 1
-  fi
-fi
-exec "${NODE}" "${SCRIPT_DIR}/../openclaw/openclaw.mjs" "$@"
-WRAPPER
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"' \
+            'if [ -x "${SCRIPT_DIR}/node" ]; then' \
+            '  NODE="${SCRIPT_DIR}/node"' \
+            'else' \
+            '  NODE="$(command -v node 2>/dev/null || true)"' \
+            '  if [ -z "${NODE}" ]; then' \
+            '    echo "openclaw: node not found. Re-run '"'"'fiiy install'"'"' or install Node.js >= 24." >&2' \
+            '    exit 1' \
+            '  fi' \
+            'fi' \
+            'exec "${NODE}" "${SCRIPT_DIR}/../openclaw/openclaw.mjs" "$@"' \
+            > "${STAGE}/bin/openclaw"
           chmod +x "${STAGE}/bin/openclaw"
 
           # ── Archive (no top-level dir; extracts into target dir) ──────
@@ -193,20 +193,21 @@ WRAPPER
           Set-Content "$STAGE\bin\.node-version" $NODE_VER
 
           # openclaw wrapper (.cmd)
-          @'
-@echo off
-set "SCRIPT_DIR=%~dp0"
-if exist "%SCRIPT_DIR%node.exe" (
-  set "NODE=%SCRIPT_DIR%node.exe"
-) else (
-  where node >nul 2>&1 || (
-    echo openclaw: node not found. Re-run "fiiy install" or install Node.js ^>= 24. 1>&2
-    exit /b 1
-  )
-  set "NODE=node"
-)
-"%NODE%" "%SCRIPT_DIR%..\openclaw\openclaw.mjs" %*
-'@ | Set-Content "$STAGE\bin\openclaw.cmd"
+          $lines = @(
+            '@echo off',
+            'set "SCRIPT_DIR=%~dp0"',
+            'if exist "%SCRIPT_DIR%node.exe" (',
+            '  set "NODE=%SCRIPT_DIR%node.exe"',
+            ') else (',
+            '  where node >nul 2>&1 || (',
+            '    echo openclaw: node not found. Re-run "fiiy install" or install Node.js ^>= 24. 1>&2',
+            '    exit /b 1',
+            '  )',
+            '  set "NODE=node"',
+            ')',
+            '"%NODE%" "%SCRIPT_DIR%..\openclaw\openclaw.mjs" %*'
+          )
+          $lines -join "`r`n" | Set-Content "$STAGE\bin\openclaw.cmd"
 
           # Archive (zip, no top-level dir)
           Push-Location $STAGE
