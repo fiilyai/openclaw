@@ -88,6 +88,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Bundle A2UI assets
+        run: pnpm canvas:a2ui:bundle
+
       - name: Build (docker profile — skips canvas UI + type declarations)
         run: pnpm run build:docker
 
