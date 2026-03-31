@@ -1,8 +1,8 @@
-name: Fiiy Binary Release
+name: Fiily Binary Release
 
-# Builds standalone openclaw archives for distribution via Fiiy's install wizard.
+# Builds standalone openclaw archives for distribution via Fiily's install wizard.
 #
-# Archive layout (no top-level dir, extracts directly into ~/.fiiy/):
+# Archive layout (no top-level dir, extracts directly into ~/.fiily/):
 #
 #   bin/
 #     node          ← Node.js 24 binary
@@ -19,10 +19,10 @@ name: Fiiy Binary Release
 #     node_modules/  (production deps only)
 #
 # Install strategy (Rust side):
-#   1. Extract archive to ~/.fiiy/
+#   1. Extract archive to ~/.fiily/
 #   2. Check if system already has node >= v24
 #   3. YES → delete bundled bin/node, bin/npm, bin/npx, lib/  (use system node)
-#   4. NO  → keep bundled node; add ~/.fiiy/bin to shell PATH
+#   4. NO  → keep bundled node; add ~/.fiily/bin to shell PATH
 
 on:
   push:
@@ -36,7 +36,7 @@ on:
         default: "24.0.2"
 
 concurrency:
-  group: fiiy-binary-release-${{ github.ref }}
+  group: fiily-binary-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -108,7 +108,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           ARCHIVE_NAME="openclaw-${VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
 
-          # Flat staging dir — maps directly to ~/.fiiy/ when extracted
+          # Flat staging dir — maps directly to ~/.fiily/ when extracted
           STAGE="$(pwd)/.release-stage"
           rm -rf "${STAGE}"
           mkdir -p "${STAGE}/bin" "${STAGE}/lib" "${STAGE}/openclaw"
@@ -144,7 +144,7 @@ jobs:
             'else' \
             '  NODE="$(command -v node 2>/dev/null || true)"' \
             '  if [ -z "${NODE}" ]; then' \
-            '    echo "openclaw: node not found. Re-run '"'"'fiiy install'"'"' or install Node.js >= 24." >&2' \
+            '    echo "openclaw: node not found. Re-run '"'"'fiily install'"'"' or install Node.js >= 24." >&2' \
             '    exit 1' \
             '  fi' \
             'fi' \
@@ -200,7 +200,7 @@ jobs:
             '  set "NODE=%SCRIPT_DIR%node.exe"',
             ') else (',
             '  where node >nul 2>&1 || (',
-            '    echo openclaw: node not found. Re-run "fiiy install" or install Node.js ^>= 24. 1>&2',
+            '    echo openclaw: node not found. Re-run "fiily install" or install Node.js ^>= 24. 1>&2',
             '    exit /b 1',
             '  )',
             '  set "NODE=node"',
