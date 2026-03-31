@@ -266,19 +266,18 @@ jobs:
             echo "⚠️ OSS credentials not configured, skipping OSS upload"
             exit 0
           fi
-          curl -fsSL https://gosspublic.alicdn.com/ossutil/v2-beta/2.0.1-beta.12250100/ossutil-2.0.1-beta.12250100-linux-amd64.zip -o /tmp/ossutil.zip
-          unzip -q /tmp/ossutil.zip -d /tmp/ossutil
-          chmod +x /tmp/ossutil/ossutil
+          curl -fsSL https://gosspublic.alicdn.com/ossutil/install.sh | bash
+          OSSUTIL="$(command -v ossutil || echo /usr/local/bin/ossutil)"
           for f in artifacts/*; do
             echo "Uploading $(basename "$f") to OSS..."
-            /tmp/ossutil/ossutil cp "$f" "oss://fiilyai/openclaw/$(basename "$f")" \
+            "$OSSUTIL" cp "$f" "oss://fiilyai/openclaw/$(basename "$f")" \
               --access-key-id "$OSS_ACCESS_KEY_ID" \
               --access-key-secret "$OSS_ACCESS_KEY_SECRET" \
               --region cn-hangzhou \
               --force
           done
           echo "${{ github.ref_name }}" > /tmp/latest.txt
-          /tmp/ossutil/ossutil cp /tmp/latest.txt "oss://fiilyai/openclaw/latest.txt" \
+          "$OSSUTIL" cp /tmp/latest.txt "oss://fiilyai/openclaw/latest.txt" \
             --access-key-id "$OSS_ACCESS_KEY_ID" \
             --access-key-secret "$OSS_ACCESS_KEY_SECRET" \
             --region cn-hangzhou \
