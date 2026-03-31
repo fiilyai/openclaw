@@ -94,6 +94,9 @@ jobs:
       - name: Bundle A2UI assets
         run: pnpm canvas:a2ui:bundle
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Build (docker profile — skips canvas UI + type declarations)
         run: pnpm run build:docker
 
