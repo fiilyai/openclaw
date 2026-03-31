@@ -266,7 +266,7 @@ jobs:
             echo "⚠️ OSS credentials not configured, skipping OSS upload"
             exit 0
           fi
-          curl -fsSL https://gosspublic.alicdn.com/ossutil/install.sh | bash
+          curl -fsSL https://gosspublic.alicdn.com/ossutil/install.sh | sudo bash
           OSSUTIL="$(command -v ossutil || echo /usr/local/bin/ossutil)"
           for f in artifacts/*; do
             echo "Uploading $(basename "$f") to OSS..."
