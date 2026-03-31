@@ -1,0 +1,250 @@
+name: Fiiy Binary Release
+
+# Builds standalone openclaw archives for distribution via Fiiy's install wizard.
+#
+# Archive layout (no top-level dir, extracts directly into ~/.fiiy/):
+#
+#   bin/
+#     node          ← Node.js 24 binary
+#     npm           ← npm (symlink on Unix, .cmd on Windows)
+#     npx           ← npx (symlink on Unix, .cmd on Windows)
+#     openclaw      ← launch wrapper (Unix shell script / .cmd on Windows)
+#     .node-version ← bundled Node.js version string
+#   lib/
+#     node_modules/npm/   ← npm package (required by npm/npx on Unix)
+#   openclaw/
+#     openclaw.mjs
+#     package.json
+#     dist/
+#     node_modules/  (production deps only)
+#
+# Install strategy (Rust side):
+#   1. Extract archive to ~/.fiiy/
+#   2. Check if system already has node >= v24
+#   3. YES → delete bundled bin/node, bin/npm, bin/npx, lib/  (use system node)
+#   4. NO  → keep bundled node; add ~/.fiiy/bin to shell PATH
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      node_bundle_version:
+        description: "Node.js LTS version to bundle (e.g. 24.0.2)"
+        required: false
+        default: "24.0.2"
+
+concurrency:
+  group: fiiy-binary-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_BUILD_VERSION: "24.x"
+  PNPM_VERSION: "10.23.0"
+  NODE_BUNDLE_VERSION: ${{ inputs.node_bundle_version || '24.0.2' }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            os: darwin
+            arch: arm64
+            node_platform: darwin-arm64
+          - runner: macos-13
+            os: darwin
+            arch: x64
+            node_platform: darwin-x64
+          - runner: ubuntu-22.04
+            os: linux
+            arch: x64
+            node_platform: linux-x64
+          - runner: windows-2022
+            os: win32
+            arch: x64
+            node_platform: win-x64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js (build toolchain)
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_BUILD_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (docker profile — skips canvas UI + type declarations)
+        run: pnpm run build:docker
+
+      - name: Prune to production dependencies
+        run: pnpm prune --production
+
+      # ── Unix (macOS / Linux) ─────────────────────────────────────────────
+      - name: Package (Unix)
+        if: matrix.os != 'win32'
+        env:
+          NODE_VER: ${{ env.NODE_BUNDLE_VERSION }}
+          NODE_PLATFORM: ${{ matrix.node_platform }}
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -p "require('./package.json').version")
+          ARCHIVE_NAME="openclaw-${VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+
+          # Flat staging dir — maps directly to ~/.fiiy/ when extracted
+          STAGE="$(pwd)/.release-stage"
+          rm -rf "${STAGE}"
+          mkdir -p "${STAGE}/bin" "${STAGE}/lib" "${STAGE}/openclaw"
+
+          # ── openclaw JS files ──────────────────────────────────────────
+          cp openclaw.mjs    "${STAGE}/openclaw/"
+          cp package.json    "${STAGE}/openclaw/"
+          cp -r dist         "${STAGE}/openclaw/dist"
+          cp -r node_modules "${STAGE}/openclaw/node_modules"
+
+          # ── Full Node.js distribution (node + npm + npx + lib) ────────
+          NODE_URL="https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-${NODE_PLATFORM}.tar.gz"
+          echo "Downloading Node.js ${NODE_VER} from: ${NODE_URL}"
+          curl -fsSL "${NODE_URL}" -o /tmp/node-dist.tar.gz
+
+          # Extract bin/node, bin/npm, bin/npx, lib/node_modules/npm
+          # --strip-components=1 removes the "node-vXX.YY.ZZ-<platform>/" prefix
+          tar -xzf /tmp/node-dist.tar.gz --strip-components=1 -C "${STAGE}" \
+            "node-v${NODE_VER}-${NODE_PLATFORM}/bin/node" \
+            "node-v${NODE_VER}-${NODE_PLATFORM}/bin/npm" \
+            "node-v${NODE_VER}-${NODE_PLATFORM}/bin/npx" \
+            "node-v${NODE_VER}-${NODE_PLATFORM}/lib/node_modules/npm"
+
+          chmod +x "${STAGE}/bin/node"
+          echo "${NODE_VER}" > "${STAGE}/bin/.node-version"
+
+          # ── openclaw wrapper (falls back to system node if bundled deleted) ──
+          cat > "${STAGE}/bin/openclaw" << 'WRAPPER'
+#!/bin/sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -x "${SCRIPT_DIR}/node" ]; then
+  NODE="${SCRIPT_DIR}/node"
+else
+  NODE="$(command -v node 2>/dev/null || true)"
+  if [ -z "${NODE}" ]; then
+    echo "openclaw: node not found. Re-run 'fiiy install' or install Node.js >= 24." >&2
+    exit 1
+  fi
+fi
+exec "${NODE}" "${SCRIPT_DIR}/../openclaw/openclaw.mjs" "$@"
+WRAPPER
+          chmod +x "${STAGE}/bin/openclaw"
+
+          # ── Archive (no top-level dir; extracts into target dir) ──────
+          tar -czf "${ARCHIVE_NAME}" -C "${STAGE}" .
+          echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
+          ls -lh "${ARCHIVE_NAME}"
+
+      # ── Windows ──────────────────────────────────────────────────────────
+      - name: Package (Windows)
+        if: matrix.os == 'win32'
+        env:
+          NODE_VER: ${{ env.NODE_BUNDLE_VERSION }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $VERSION = (Get-Content package.json | ConvertFrom-Json).version
+          $ARCHIVE_NAME = "openclaw-${VERSION}-win32-x64.zip"
+
+          $STAGE = Join-Path (Get-Location) ".release-stage"
+          Remove-Item -Recurse -Force $STAGE -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$STAGE\bin"     | Out-Null
+          New-Item -ItemType Directory -Force "$STAGE\openclaw" | Out-Null
+
+          # openclaw JS files
+          Copy-Item openclaw.mjs "$STAGE\openclaw\"
+          Copy-Item package.json "$STAGE\openclaw\"
+          Copy-Item -Recurse dist         "$STAGE\openclaw\dist"
+          Copy-Item -Recurse node_modules "$STAGE\openclaw\node_modules"
+
+          # Full Node.js distribution for Windows
+          $NODE_URL = "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-win-x64.zip"
+          Write-Host "Downloading Node.js ${NODE_VER} from: $NODE_URL"
+          Invoke-WebRequest -Uri $NODE_URL -OutFile "$env:TEMP\node-dist.zip"
+          Expand-Archive -Path "$env:TEMP\node-dist.zip" -DestinationPath "$env:TEMP\node-extract"
+
+          $NODE_DIR = "$env:TEMP\node-extract\node-v${NODE_VER}-win-x64"
+          Copy-Item "$NODE_DIR\node.exe"  "$STAGE\bin\node.exe"
+          Copy-Item "$NODE_DIR\npm.cmd"   "$STAGE\bin\npm.cmd"
+          Copy-Item "$NODE_DIR\npx.cmd"   "$STAGE\bin\npx.cmd"
+          Copy-Item -Recurse "$NODE_DIR\node_modules\npm" "$STAGE\bin\node_modules\npm"
+          Set-Content "$STAGE\bin\.node-version" $NODE_VER
+
+          # openclaw wrapper (.cmd)
+          @'
+@echo off
+set "SCRIPT_DIR=%~dp0"
+if exist "%SCRIPT_DIR%node.exe" (
+  set "NODE=%SCRIPT_DIR%node.exe"
+) else (
+  where node >nul 2>&1 || (
+    echo openclaw: node not found. Re-run "fiiy install" or install Node.js ^>= 24. 1>&2
+    exit /b 1
+  )
+  set "NODE=node"
+)
+"%NODE%" "%SCRIPT_DIR%..\openclaw\openclaw.mjs" %*
+'@ | Set-Content "$STAGE\bin\openclaw.cmd"
+
+          # Archive (zip, no top-level dir)
+          Push-Location $STAGE
+          Compress-Archive -Path ".\*" -DestinationPath (Join-Path (Split-Path $STAGE) $ARCHIVE_NAME)
+          Pop-Location
+
+          echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $env:GITHUB_ENV
+          Get-Item (Join-Path (Split-Path $STAGE) $ARCHIVE_NAME) | Select-Object Name, @{N='Size(MB)';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ env.ARCHIVE_NAME }}
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz,artifacts/*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
