@@ -170,6 +170,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $NV = $env:NODE_VER
           $VERSION = (Get-Content package.json | ConvertFrom-Json).version
           $ARCHIVE_NAME = "openclaw-${VERSION}-win32-x64.zip"
 
@@ -185,12 +186,12 @@ jobs:
           Copy-Item -Recurse node_modules "$STAGE\openclaw\node_modules"
 
           # Full Node.js distribution for Windows
-          $NODE_URL = "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-win-x64.zip"
-          Write-Host "Downloading Node.js ${NODE_VER} from: $NODE_URL"
+          $NODE_URL = "https://nodejs.org/dist/v${NV}/node-v${NV}-win-x64.zip"
+          Write-Host "Downloading Node.js ${NV} from: $NODE_URL"
           Invoke-WebRequest -Uri $NODE_URL -OutFile "$env:TEMP\node-dist.zip"
           Expand-Archive -Path "$env:TEMP\node-dist.zip" -DestinationPath "$env:TEMP\node-extract"
 
-          $NODE_DIR = "$env:TEMP\node-extract\node-v${NODE_VER}-win-x64"
+          $NODE_DIR = "$env:TEMP\node-extract\node-v${NV}-win-x64"
           Copy-Item "$NODE_DIR\node.exe"  "$STAGE\bin\node.exe"
           Copy-Item "$NODE_DIR\npm.cmd"   "$STAGE\bin\npm.cmd"
           Copy-Item "$NODE_DIR\npx.cmd"   "$STAGE\bin\npx.cmd"
