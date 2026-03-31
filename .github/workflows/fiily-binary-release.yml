@@ -120,6 +120,8 @@ jobs:
           cp openclaw.mjs    "${STAGE}/openclaw/"
           cp package.json    "${STAGE}/openclaw/"
           cp -r dist         "${STAGE}/openclaw/dist"
+          # Remove broken symlinks left by pnpm prune before copying
+          find node_modules -type l ! -exec test -e {} \; -delete 2>/dev/null || true
           cp -r node_modules "${STAGE}/openclaw/node_modules"
 
           # ── Full Node.js distribution (node + npm + npx + lib) ────────
