@@ -268,18 +268,11 @@ jobs:
           fi
           curl -fsSL https://gosspublic.alicdn.com/ossutil/install.sh | sudo bash
           OSSUTIL="$(command -v ossutil || echo /usr/local/bin/ossutil)"
+          "$OSSUTIL" config -e oss-cn-hangzhou.aliyuncs.com -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET"
           for f in artifacts/*; do
             echo "Uploading $(basename "$f") to OSS..."
-            "$OSSUTIL" cp "$f" "oss://fiilyai/openclaw/$(basename "$f")" \
-              --access-key-id "$OSS_ACCESS_KEY_ID" \
-              --access-key-secret "$OSS_ACCESS_KEY_SECRET" \
-              --region cn-hangzhou \
-              --force
+            "$OSSUTIL" cp "$f" "oss://fiilyai/openclaw/$(basename "$f")" -f
           done
           echo "${{ github.ref_name }}" > /tmp/latest.txt
-          "$OSSUTIL" cp /tmp/latest.txt "oss://fiilyai/openclaw/latest.txt" \
-            --access-key-id "$OSS_ACCESS_KEY_ID" \
-            --access-key-secret "$OSS_ACCESS_KEY_SECRET" \
-            --region cn-hangzhou \
-            --force
+          "$OSSUTIL" cp /tmp/latest.txt "oss://fiilyai/openclaw/latest.txt" -f
           echo "✅ OSS upload complete"
