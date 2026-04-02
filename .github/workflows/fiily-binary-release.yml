@@ -133,7 +133,6 @@ jobs:
 
           VERSION=$(node -p "require('./package.json').version")
           ARCHIVE_NAME="openclaw-${VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
-          NODE_ARCHIVE_NAME="node-${NODE_VER}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
 
           # ── 1. OpenClaw 包（不含 Node.js）──────────────────────────────
           STAGE="$(pwd)/.release-stage"
@@ -143,6 +142,7 @@ jobs:
           cp openclaw.mjs    "${STAGE}/openclaw/"
           cp package.json    "${STAGE}/openclaw/"
           cp -r dist         "${STAGE}/openclaw/dist"
+          mkdir -p "${STAGE}/openclaw/docs/reference"
           cp -r docs/reference/templates "${STAGE}/openclaw/docs/reference/templates"
           rsync -a --exclude='node_modules' --exclude='*.test.ts' --exclude='*.test.js' extensions/ "${STAGE}/openclaw/extensions/"
           find node_modules -type l ! -exec test -e {} \; -delete 2>/dev/null || true
