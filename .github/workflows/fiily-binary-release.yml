@@ -34,6 +34,11 @@ on:
         description: "Node.js LTS version to bundle (e.g. 24.0.2)"
         required: false
         default: "24.0.2"
+      bundle_node:
+        description: "Bundle Node.js in the openclaw package (full package)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: fiily-binary-release-${{ github.ref }}
@@ -94,20 +99,32 @@ jobs:
       - name: Bundle A2UI assets
         run: pnpm canvas:a2ui:bundle
 
-      - name: Build Control UI
-        run: pnpm ui:build
-
       - name: Build (docker profile — skips canvas UI + type declarations)
         run: pnpm run build:docker
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Prune to production dependencies
         run: pnpm prune --production
+
+      - name: Remove optional large dependencies (available for on-demand download)
+        shell: bash
+        run: |
+          echo "Before cleanup:"
+          du -sh node_modules/@node-llama-cpp node_modules/@lancedb node_modules/koffi 2>/dev/null || true
+          rm -rf node_modules/@node-llama-cpp node_modules/node-llama-cpp
+          rm -rf node_modules/@lancedb
+          rm -rf node_modules/koffi
+          echo "After cleanup:"
+          du -sh node_modules 2>/dev/null || true
 
       # ── Unix (macOS / Linux) ─────────────────────────────────────────────
       - name: Package (Unix)
         if: matrix.os != 'win32'
         env:
           NODE_VER: ${{ env.NODE_BUNDLE_VERSION }}
+          BUNDLE_NODE: ${{ inputs.bundle_node || 'false' }}
           NODE_PLATFORM: ${{ matrix.node_platform }}
           TARGET_OS: ${{ matrix.os }}
           TARGET_ARCH: ${{ matrix.arch }}
@@ -116,40 +133,22 @@ jobs:
 
           VERSION=$(node -p "require('./package.json').version")
           ARCHIVE_NAME="openclaw-${VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
+          NODE_ARCHIVE_NAME="node-${NODE_VER}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
 
-          # Flat staging dir — maps directly to ~/.fiily/ when extracted
+          # ── 1. OpenClaw 包（不含 Node.js）──────────────────────────────
           STAGE="$(pwd)/.release-stage"
           rm -rf "${STAGE}"
-          mkdir -p "${STAGE}/bin" "${STAGE}/lib" "${STAGE}/openclaw"
+          mkdir -p "${STAGE}/bin" "${STAGE}/openclaw"
 
-          # ── openclaw JS files ──────────────────────────────────────────
           cp openclaw.mjs    "${STAGE}/openclaw/"
           cp package.json    "${STAGE}/openclaw/"
           cp -r dist         "${STAGE}/openclaw/dist"
           cp -r docs/reference/templates "${STAGE}/openclaw/docs/reference/templates"
-          # Extensions source (runtime loads .ts files directly); exclude node_modules and tests
           rsync -a --exclude='node_modules' --exclude='*.test.ts' --exclude='*.test.js' extensions/ "${STAGE}/openclaw/extensions/"
-          # Remove broken symlinks left by pnpm prune before copying
           find node_modules -type l ! -exec test -e {} \; -delete 2>/dev/null || true
           cp -r node_modules "${STAGE}/openclaw/node_modules"
 
-          # ── Full Node.js distribution (node + npm + npx + lib) ────────
-          NODE_URL="https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-${NODE_PLATFORM}.tar.gz"
-          echo "Downloading Node.js ${NODE_VER} from: ${NODE_URL}"
-          curl -fsSL "${NODE_URL}" -o /tmp/node-dist.tar.gz
-
-          # Extract bin/node, bin/npm, bin/npx, lib/node_modules/npm
-          # --strip-components=1 removes the "node-vXX.YY.ZZ-<platform>/" prefix
-          tar -xzf /tmp/node-dist.tar.gz --strip-components=1 -C "${STAGE}" \
-            "node-v${NODE_VER}-${NODE_PLATFORM}/bin/node" \
-            "node-v${NODE_VER}-${NODE_PLATFORM}/bin/npm" \
-            "node-v${NODE_VER}-${NODE_PLATFORM}/bin/npx" \
-            "node-v${NODE_VER}-${NODE_PLATFORM}/lib/node_modules/npm"
-
-          chmod +x "${STAGE}/bin/node"
-          echo "${NODE_VER}" > "${STAGE}/bin/.node-version"
-
-          # ── openclaw wrapper (falls back to system node if bundled deleted) ──
+          # openclaw wrapper (uses system node or bundled node if present)
           printf '%s\n' \
             '#!/bin/sh' \
             'SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"' \
@@ -158,7 +157,7 @@ jobs:
             'else' \
             '  NODE="$(command -v node 2>/dev/null || true)"' \
             '  if [ -z "${NODE}" ]; then' \
-            '    echo "openclaw: node not found. Re-run '"'"'fiily install'"'"' or install Node.js >= 24." >&2' \
+            '    echo "openclaw: node not found. Re-run '"'"'fiily install'"'"' or install Node.js >= 22." >&2' \
             '    exit 1' \
             '  fi' \
             'fi' \
@@ -166,7 +165,22 @@ jobs:
             > "${STAGE}/bin/openclaw"
           chmod +x "${STAGE}/bin/openclaw"
 
-          # ── Archive (no top-level dir; extracts into target dir) ──────
+          # ── 可选：捆绑 Node.js（full 包）─────────────────────────────
+          if [ "${BUNDLE_NODE}" = "true" ]; then
+            mkdir -p "${STAGE}/lib"
+            NODE_URL="https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-${NODE_PLATFORM}.tar.gz"
+            echo "Bundling Node.js ${NODE_VER} from: ${NODE_URL}"
+            curl -fsSL "${NODE_URL}" -o /tmp/node-dist.tar.gz
+            tar -xzf /tmp/node-dist.tar.gz --strip-components=1 -C "${STAGE}" \
+              "node-v${NODE_VER}-${NODE_PLATFORM}/bin/node" \
+              "node-v${NODE_VER}-${NODE_PLATFORM}/bin/npm" \
+              "node-v${NODE_VER}-${NODE_PLATFORM}/bin/npx" \
+              "node-v${NODE_VER}-${NODE_PLATFORM}/lib/node_modules/npm"
+            chmod +x "${STAGE}/bin/node"
+            echo "${NODE_VER}" > "${STAGE}/bin/.node-version"
+            ARCHIVE_NAME="openclaw-${VERSION}-${TARGET_OS}-${TARGET_ARCH}-full.tar.gz"
+          fi
+
           tar -czf "${ARCHIVE_NAME}" -C "${STAGE}" .
           echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> "$GITHUB_ENV"
           ls -lh "${ARCHIVE_NAME}"
@@ -176,39 +190,27 @@ jobs:
         if: matrix.os == 'win32'
         env:
           NODE_VER: ${{ env.NODE_BUNDLE_VERSION }}
+          BUNDLE_NODE: ${{ inputs.bundle_node || 'false' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $NV = $env:NODE_VER
           $VERSION = (Get-Content package.json | ConvertFrom-Json).version
           $ARCHIVE_NAME = "openclaw-${VERSION}-win32-x64.zip"
+          $NODE_ARCHIVE_NAME = "node-${NV}-win32-x64.zip"
 
+          # ── 1. OpenClaw 包（不含 Node.js）──────────────────────────────
           $STAGE = Join-Path (Get-Location) ".release-stage"
           Remove-Item -Recurse -Force $STAGE -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force "$STAGE\bin"     | Out-Null
           New-Item -ItemType Directory -Force "$STAGE\openclaw" | Out-Null
 
-          # openclaw JS files
           Copy-Item openclaw.mjs "$STAGE\openclaw\"
           Copy-Item package.json "$STAGE\openclaw\"
           Copy-Item -Recurse dist         "$STAGE\openclaw\dist"
           Copy-Item -Recurse docs\reference\templates "$STAGE\openclaw\docs\reference\templates"
-          # Extensions source (runtime loads .ts files directly); exclude node_modules
           robocopy extensions "$STAGE\openclaw\extensions" /E /XD node_modules /XF *.test.ts *.test.js /NFL /NDL /NJH /NJS; if ($LASTEXITCODE -le 7) { $LASTEXITCODE = 0 }
           Copy-Item -Recurse node_modules "$STAGE\openclaw\node_modules"
-
-          # Full Node.js distribution for Windows
-          $NODE_URL = "https://nodejs.org/dist/v${NV}/node-v${NV}-win-x64.zip"
-          Write-Host "Downloading Node.js ${NV} from: $NODE_URL"
-          Invoke-WebRequest -Uri $NODE_URL -OutFile "$env:TEMP\node-dist.zip"
-          Expand-Archive -Path "$env:TEMP\node-dist.zip" -DestinationPath "$env:TEMP\node-extract"
-
-          $NODE_DIR = "$env:TEMP\node-extract\node-v${NV}-win-x64"
-          Copy-Item "$NODE_DIR\node.exe"  "$STAGE\bin\node.exe"
-          Copy-Item "$NODE_DIR\npm.cmd"   "$STAGE\bin\npm.cmd"
-          Copy-Item "$NODE_DIR\npx.cmd"   "$STAGE\bin\npx.cmd"
-          Copy-Item -Recurse "$NODE_DIR\node_modules\npm" "$STAGE\bin\node_modules\npm"
-          Set-Content "$STAGE\bin\.node-version" $NODE_VER
 
           # openclaw wrapper (.cmd)
           $lines = @(
@@ -218,7 +220,7 @@ jobs:
             '  set "NODE=%SCRIPT_DIR%node.exe"',
             ') else (',
             '  where node >nul 2>&1 || (',
-            '    echo openclaw: node not found. Re-run "fiily install" or install Node.js ^>= 24. 1>&2',
+            '    echo openclaw: node not found. Re-run "fiily install" or install Node.js ^>= 22. 1>&2',
             '    exit /b 1',
             '  )',
             '  set "NODE=node"',
@@ -227,15 +229,31 @@ jobs:
           )
           $lines -join "`r`n" | Set-Content "$STAGE\bin\openclaw.cmd"
 
-          # Archive (zip, no top-level dir)
           Push-Location $STAGE
           Compress-Archive -Path ".\*" -DestinationPath (Join-Path (Split-Path $STAGE) $ARCHIVE_NAME)
           Pop-Location
+          # 可选：捆绑 Node.js（full 包）
+          if ($env:BUNDLE_NODE -eq 'true') {
+            $NODE_URL = "https://nodejs.org/dist/v${NV}/node-v${NV}-win-x64.zip"
+            Write-Host "Bundling Node.js ${NV} from: $NODE_URL"
+            Invoke-WebRequest -Uri $NODE_URL -OutFile "$env:TEMP\node-dist.zip"
+            Expand-Archive -Path "$env:TEMP\node-dist.zip" -DestinationPath "$env:TEMP\node-extract" -Force
+            $NODE_DIR = "$env:TEMP\node-extract\node-v${NV}-win-x64"
+            Copy-Item "$NODE_DIR\node.exe"  "$STAGE\bin\node.exe"
+            Copy-Item "$NODE_DIR\npm.cmd"   "$STAGE\bin\npm.cmd"
+            Copy-Item "$NODE_DIR\npx.cmd"   "$STAGE\bin\npx.cmd"
+            Copy-Item -Recurse "$NODE_DIR\node_modules\npm" "$STAGE\bin\node_modules\npm"
+            Set-Content "$STAGE\bin\.node-version" $NV
+            $ARCHIVE_NAME = "openclaw-${VERSION}-win32-x64-full.zip"
+          }
 
           echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> $env:GITHUB_ENV
+          Push-Location $STAGE
+          Compress-Archive -Path ".\*" -DestinationPath (Join-Path (Split-Path $STAGE) $ARCHIVE_NAME) -Force
+          Pop-Location
           Get-Item (Join-Path (Split-Path $STAGE) $ARCHIVE_NAME) | Select-Object Name, @{N='Size(MB)';E={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Upload archive artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: openclaw-${{ matrix.os }}-${{ matrix.arch }}

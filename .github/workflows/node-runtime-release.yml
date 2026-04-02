@@ -1,0 +1,149 @@
+name: Node Runtime Release
+
+# Builds standalone Node.js runtime packages for Fiily's on-demand download.
+# These are uploaded to OSS and only downloaded by users who don't have Node.js >= 22.
+#
+# Archive layout (extracts into ~/.fiily/):
+#   bin/
+#     node          (or node.exe on Windows)
+#     npm           (or npm.cmd)
+#     npx           (or npx.cmd)
+#     .node-version
+#   lib/
+#     node_modules/npm/   (Unix only)
+#   bin/
+#     node_modules/npm/   (Windows only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version to package (e.g. 24.0.2)"
+        required: true
+        default: "24.0.2"
+
+env:
+  NODE_VERSION: ${{ inputs.node_version }}
+
+jobs:
+  build:
+    name: Package ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: darwin-arm64
+            node_platform: darwin-arm64
+          - runner: macos-14
+            platform: darwin-x64
+            node_platform: darwin-x64
+          - runner: ubuntu-22.04
+            platform: linux-x64
+            node_platform: linux-x64
+          - runner: windows-2022
+            platform: win32-x64
+            node_platform: win-x64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Package Node.js (Unix)
+        if: matrix.platform != 'win32-x64'
+        env:
+          NV: ${{ env.NODE_VERSION }}
+          NODE_PLATFORM: ${{ matrix.node_platform }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="node-${NV}-${TARGET_PLATFORM}.tar.gz"
+          STAGE="$(pwd)/node-stage"
+          mkdir -p "${STAGE}/bin" "${STAGE}/lib"
+
+          NODE_URL="https://nodejs.org/dist/v${NV}/node-v${NV}-${NODE_PLATFORM}.tar.gz"
+          echo "Downloading Node.js ${NV} from: ${NODE_URL}"
+          curl -fsSL "${NODE_URL}" -o /tmp/node-dist.tar.gz
+
+          tar -xzf /tmp/node-dist.tar.gz --strip-components=1 -C "${STAGE}" \
+            "node-v${NV}-${NODE_PLATFORM}/bin/node" \
+            "node-v${NV}-${NODE_PLATFORM}/bin/npm" \
+            "node-v${NV}-${NODE_PLATFORM}/bin/npx" \
+            "node-v${NV}-${NODE_PLATFORM}/lib/node_modules/npm"
+
+          chmod +x "${STAGE}/bin/node"
+          echo "${NV}" > "${STAGE}/bin/.node-version"
+
+          tar -czf "${ARCHIVE}" -C "${STAGE}" .
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+          ls -lh "${ARCHIVE}"
+
+      - name: Package Node.js (Windows)
+        if: matrix.platform == 'win32-x64'
+        env:
+          NV: ${{ env.NODE_VERSION }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ARCHIVE = "node-${NV}-win32-x64.zip"
+          $STAGE = Join-Path (Get-Location) "node-stage"
+          New-Item -ItemType Directory -Force "$STAGE\bin" | Out-Null
+
+          $NODE_URL = "https://nodejs.org/dist/v${NV}/node-v${NV}-win-x64.zip"
+          Write-Host "Downloading Node.js ${NV} from: $NODE_URL"
+          Invoke-WebRequest -Uri $NODE_URL -OutFile "$env:TEMP\node-dist.zip"
+          Expand-Archive -Path "$env:TEMP\node-dist.zip" -DestinationPath "$env:TEMP\node-extract"
+
+          $NODE_DIR = "$env:TEMP\node-extract\node-v${NV}-win-x64"
+          Copy-Item "$NODE_DIR\node.exe"  "$STAGE\bin\node.exe"
+          Copy-Item "$NODE_DIR\npm.cmd"   "$STAGE\bin\npm.cmd"
+          Copy-Item "$NODE_DIR\npx.cmd"   "$STAGE\bin\npx.cmd"
+          Copy-Item -Recurse "$NODE_DIR\node_modules\npm" "$STAGE\bin\node_modules\npm"
+          Set-Content "$STAGE\bin\.node-version" $NV
+
+          Push-Location $STAGE
+          Compress-Archive -Path ".\*" -DestinationPath (Join-Path (Split-Path $STAGE) $ARCHIVE)
+          Pop-Location
+          echo "ARCHIVE=$ARCHIVE" >> $env:GITHUB_ENV
+          Get-Item (Join-Path (Split-Path $STAGE) $ARCHIVE) | Select-Object Name, @{N='Size(MB)';E={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.platform }}
+          path: ${{ env.ARCHIVE }}
+
+  upload:
+    name: Upload to OSS
+    needs: build
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Upload to Aliyun OSS
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          NODE_VER: ${{ env.NODE_VERSION }}
+        run: |
+          if [ -z "$OSS_ACCESS_KEY_ID" ]; then
+            echo "⚠️ OSS credentials not configured, skipping"
+            exit 0
+          fi
+          curl -fsSL https://gosspublic.alicdn.com/ossutil/install.sh | sudo bash
+          OSSUTIL="$(command -v ossutil || echo /usr/local/bin/ossutil)"
+          "$OSSUTIL" config -e oss-cn-hangzhou.aliyuncs.com -i "$OSS_ACCESS_KEY_ID" -k "$OSS_ACCESS_KEY_SECRET"
+
+          for f in artifacts/*; do
+            echo "Uploading $(basename "$f") to oss://fiilyai/node-runtime/"
+            "$OSSUTIL" cp "$f" "oss://fiilyai/node-runtime/$(basename "$f")" -f
+          done
+          echo "✅ Node runtime upload complete (v${NODE_VER})"
