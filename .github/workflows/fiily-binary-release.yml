@@ -12,11 +12,14 @@ name: Fiily Binary Release
 #     .node-version ← bundled Node.js version string
 #   lib/
 #     node_modules/npm/   ← npm package (required by npm/npx on Unix)
-#   openclaw/
-#     openclaw.mjs
-#     package.json
-#     dist/
-#     node_modules/  (production deps only)
+#   node_modules/
+#     openclaw/   ← OpenClaw 放在这里是为了让 Node.js 通过 NODE_PATH=~/.fiily/node_modules
+#                   能正确解析插件的 require('openclaw/plugin-sdk')，避免与用户系统
+#                   其他来源（npm/brew/apt/手动）的 openclaw 冲突
+#       openclaw.mjs
+#       package.json
+#       dist/
+#       node_modules/  (openclaw 自己的 production deps)
 #
 # Install strategy (Rust side):
 #   1. Extract archive to ~/.fiily/
@@ -135,18 +138,22 @@ jobs:
           ARCHIVE_NAME="openclaw-${VERSION}-${TARGET_OS}-${TARGET_ARCH}.tar.gz"
 
           # ── 1. OpenClaw 包（不含 Node.js）──────────────────────────────
+          # openclaw 直接放在 node_modules/openclaw/，这样 Node.js 通过
+          # NODE_PATH=~/.fiily/node_modules 就能解析到 Fiily 的 openclaw，
+          # 避免和用户系统其他来源的 openclaw 冲突
           STAGE="$(pwd)/.release-stage"
+          OC_DIR="${STAGE}/node_modules/openclaw"
           rm -rf "${STAGE}"
-          mkdir -p "${STAGE}/bin" "${STAGE}/openclaw"
+          mkdir -p "${STAGE}/bin" "${OC_DIR}"
 
-          cp openclaw.mjs    "${STAGE}/openclaw/"
-          cp package.json    "${STAGE}/openclaw/"
-          cp -r dist         "${STAGE}/openclaw/dist"
-          mkdir -p "${STAGE}/openclaw/docs/reference"
-          cp -r docs/reference/templates "${STAGE}/openclaw/docs/reference/templates"
-          rsync -a --exclude='node_modules' --exclude='*.test.ts' --exclude='*.test.js' extensions/ "${STAGE}/openclaw/extensions/"
+          cp openclaw.mjs    "${OC_DIR}/"
+          cp package.json    "${OC_DIR}/"
+          cp -r dist         "${OC_DIR}/dist"
+          mkdir -p "${OC_DIR}/docs/reference"
+          cp -r docs/reference/templates "${OC_DIR}/docs/reference/templates"
+          rsync -a --exclude='node_modules' --exclude='*.test.ts' --exclude='*.test.js' extensions/ "${OC_DIR}/extensions/"
           find node_modules -type l ! -exec test -e {} \; -delete 2>/dev/null || true
-          cp -r node_modules "${STAGE}/openclaw/node_modules"
+          cp -r node_modules "${OC_DIR}/node_modules"
 
           # openclaw wrapper (uses system node or bundled node if present)
           printf '%s\n' \
@@ -161,7 +168,7 @@ jobs:
             '    exit 1' \
             '  fi' \
             'fi' \
-            'exec "${NODE}" "${SCRIPT_DIR}/../openclaw/openclaw.mjs" "$@"' \
+            'exec "${NODE}" "${SCRIPT_DIR}/../node_modules/openclaw/openclaw.mjs" "$@"' \
             > "${STAGE}/bin/openclaw"
           chmod +x "${STAGE}/bin/openclaw"
 
@@ -200,17 +207,20 @@ jobs:
           $NODE_ARCHIVE_NAME = "node-${NV}-win32-x64.zip"
 
           # ── 1. OpenClaw 包（不含 Node.js）──────────────────────────────
+          # openclaw 直接放在 node_modules\openclaw\，这样 Node.js 通过
+          # NODE_PATH=~/.fiily/node_modules 能解析到 Fiily 的 openclaw
           $STAGE = Join-Path (Get-Location) ".release-stage"
+          $OC_DIR = "$STAGE\node_modules\openclaw"
           Remove-Item -Recurse -Force $STAGE -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force "$STAGE\bin"     | Out-Null
-          New-Item -ItemType Directory -Force "$STAGE\openclaw" | Out-Null
+          New-Item -ItemType Directory -Force "$STAGE\bin" | Out-Null
+          New-Item -ItemType Directory -Force $OC_DIR      | Out-Null
 
-          Copy-Item openclaw.mjs "$STAGE\openclaw\"
-          Copy-Item package.json "$STAGE\openclaw\"
-          Copy-Item -Recurse dist         "$STAGE\openclaw\dist"
-          Copy-Item -Recurse docs\reference\templates "$STAGE\openclaw\docs\reference\templates"
-          robocopy extensions "$STAGE\openclaw\extensions" /E /XD node_modules /XF *.test.ts *.test.js /NFL /NDL /NJH /NJS; if ($LASTEXITCODE -le 7) { $LASTEXITCODE = 0 }
-          Copy-Item -Recurse node_modules "$STAGE\openclaw\node_modules"
+          Copy-Item openclaw.mjs "$OC_DIR\"
+          Copy-Item package.json "$OC_DIR\"
+          Copy-Item -Recurse dist         "$OC_DIR\dist"
+          Copy-Item -Recurse docs\reference\templates "$OC_DIR\docs\reference\templates"
+          robocopy extensions "$OC_DIR\extensions" /E /XD node_modules /XF *.test.ts *.test.js /NFL /NDL /NJH /NJS; if ($LASTEXITCODE -le 7) { $LASTEXITCODE = 0 }
+          Copy-Item -Recurse node_modules "$OC_DIR\node_modules"
 
           # openclaw wrapper (.cmd)
           $lines = @(
@@ -225,7 +235,7 @@ jobs:
             '  )',
             '  set "NODE=node"',
             ')',
-            '"%NODE%" "%SCRIPT_DIR%..\openclaw\openclaw.mjs" %*'
+            '"%NODE%" "%SCRIPT_DIR%..\node_modules\openclaw\openclaw.mjs" %*'
           )
           $lines -join "`r`n" | Set-Content "$STAGE\bin\openclaw.cmd"
 
