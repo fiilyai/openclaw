@@ -73,7 +73,9 @@ jobs:
           chmod +x "${STAGE}/bin/node"
           echo "${NV}" > "${STAGE}/bin/.node-version"
 
-          tar -czf "${ARCHIVE}" -C "${STAGE}" .
+          TOP="node-${NV}-${TARGET_PLATFORM}"
+          mv "${STAGE}" "${TOP}"
+          tar -czf "${ARCHIVE}" "${TOP}"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
           ls -lh "${ARCHIVE}"
 
@@ -101,9 +103,9 @@ jobs:
           Copy-Item -Recurse "$NODE_DIR\node_modules\npm" "$STAGE\bin\node_modules\npm"
           Set-Content "$STAGE\bin\.node-version" $NV
 
-          Push-Location $STAGE
-          Compress-Archive -Path ".\*" -DestinationPath (Join-Path (Split-Path $STAGE) $ARCHIVE)
-          Pop-Location
+          $TOP = "node-$NV-win32-x64"
+          Rename-Item $STAGE $TOP
+          Compress-Archive -Path "$TOP" -DestinationPath $ARCHIVE
           echo "ARCHIVE=$ARCHIVE" >> $env:GITHUB_ENV
           Get-Item (Join-Path (Split-Path $STAGE) $ARCHIVE) | Select-Object Name, @{N='Size(MB)';E={[math]::Round($_.Length/1MB,1)}}
 
